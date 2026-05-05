@@ -1,13 +1,13 @@
 {
-  "name": "ddot-vscode-extension",
+  "name": "ddot",
   "displayName": "ddot.it — Knowledge Graph Notation",
-  "description": "Authoring support for ddot.it — a minimal line-oriented notation for typed knowledge graphs.",
+  "description": "Authoring support for ddot.it — a minimal notation for knowledge graphs.",
   "publisher": "calpano",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "engines": { "vscode": "^1.76.0" },
   "icon": "icon-128.png",
   "categories": ["Programming Languages", "Snippets"],
-  "keywords": ["ddot.it", "ddot", "knowledge graph", "triples", "rdf", "graph notation"],
+  "keywords": ["ddot.it", "triple", "graph", "semantic", "linked data", "syntax", "knowledge graph", "ontology", "ddot ..works.. everywhere"],
   "repository": {
     "type": "git",
     "url": "https://github.com/Calpano/ddot.it-vscode"
@@ -33,7 +33,7 @@
         "icon": {
           "light": "./icon-dark.svg",
           "dark": "./icon.svg"
-        } 
+        }
       }
     ],
     "grammars": [

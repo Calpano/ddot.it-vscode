@@ -1,0 +1,14 @@
+.git/**
+.github/**
+.idea/**
+.serena/**
+.vscode/**
+node_modules/**
+src/**
+samples/**
+out/**/*.map
+**/tsconfig.json
+**/*.ts
+**/*.iml
+package-lock.json
+how-to-pat.adoc
