@@ -1,6 +1,6 @@
 {
   "name": "ddot-vscode-extension",
-  "displayName": "ddot.it syntax highlighting",
+  "displayName": "ddot.it — Knowledge Graph Notation",
   "publisher": "calpano",
   "version": "0.0.1",
   "engines": { "vscode": "^1.76.0" },
