@@ -51,7 +51,7 @@ function formatDdotPart(text: string): string {
 
 function formatDdotLine(line: string): string {
   const trimmed = line.trim();
-  if (trimmed === '' || trimmed.startsWith('//')) return line.trimEnd();
+  if (trimmed === '') return line.trimEnd();
   if (trimmed === ',,') return ',,';
 
   // Each ,,-separated part is formatted independently. ' ,, ' joins them; a
@@ -100,7 +100,7 @@ class DdotFoldingRangeProvider implements vscode.FoldingRangeProvider {
       const line = lines[i].trim();
       
       // Start a fold region when we see a triple (subject .. predicate .. object)
-      if (line.includes('..') && !line.startsWith('//')) {
+      if (line.includes('..')) {
         if (currentStart === null) {
           currentStart = i;
         }
@@ -136,7 +136,7 @@ class DdotDocumentSymbolProvider implements vscode.DocumentSymbolProvider {
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
       
-      if (line === '' || line.startsWith('//')) continue;
+      if (line === '') continue;
       // Skip continuation/metadata lines (no subject of their own)
       if (line.startsWith('..') || line.startsWith(',,')) continue;
 
@@ -190,7 +190,6 @@ function isContinuationContext(
   for (let i = line - 1; i >= 0; i--) {
     const text = document.lineAt(i).text.trim();
     if (text === '') return false;
-    if (text.startsWith('//')) continue;
     const seps: string[] = text.match(/\.{4}|\.{2}/g) ?? [];
     const dotDotCount = seps.filter((s) => s === '..').length;
     const hasSimple = seps.includes('....');
@@ -230,7 +229,7 @@ class DdotCompletionProvider implements vscode.CompletionItemProvider {
 
     for (const line of document.getText().split('\n')) {
       const trimmed = line.trim();
-      if (trimmed === '' || trimmed.startsWith('//')) continue;
+      if (trimmed === '') continue;
 
       // Only index when the line has fully-formed link syntax following the
       // subject: either two `..` separators (..rel..) or one `....`.
@@ -663,8 +662,20 @@ export function activate(context: vscode.ExtensionContext) {
 
       // Emit one event per line (JSONL), matching
       // https://ddot.it/developer-guide.html#events
+      // Spec field order: from, type, to, meta, kind, source, location.
       const events = parseDocument(editor.document);
-      const jsonl = events.map((e) => JSON.stringify(e)).join('\n');
+      const jsonl = events
+        .map((e) => {
+          const ordered: Record<string, unknown> = { from: e.from };
+          if (e.type !== undefined) ordered.type = e.type;
+          ordered.to = e.to;
+          if (e.meta !== undefined) ordered.meta = e.meta;
+          ordered.kind = e.kind;
+          ordered.source = e.source;
+          ordered.location = e.location;
+          return JSON.stringify(ordered);
+        })
+        .join('\n');
 
       vscode.workspace
         .openTextDocument({ language: 'jsonl', content: jsonl })
@@ -681,8 +692,8 @@ function validateDocument(document: vscode.TextDocument): any[] {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
-    
-    if (line === '' || line.startsWith('//')) continue;
+
+    if (line === '') continue;
 
     const doubleDots = (line.match(/\.\./g) || []).length;
     
@@ -778,7 +789,7 @@ function parseDocument(document: vscode.TextDocument): DdotEvent[] {
 
   for (let i = 0; i < lines.length; i++) {
     const trimmed = lines[i].trim();
-    if (trimmed === '' || trimmed.startsWith('//')) continue;
+    if (trimmed === '') continue;
 
     // Inside an open multi-line metadata block: each non-`,,` line is a
     // ..key.. value pair appended to the previous event's meta array.
