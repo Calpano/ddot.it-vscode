@@ -1,0 +1,62 @@
+{
+  "name": "ddot-vscode-extension",
+  "displayName": "ddot.it syntax highlighting",
+  "publisher": "Calpano.com",
+  "version": "0.0.1",
+  "engines": { "vscode": "^1.50.0" },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "typescript": "^4.9.5",
+    "@types/node": "^18.16.0",
+    "@types/vscode": "^1.76.0"
+  },
+  "activationEvents": ["onLanguage:ddot.it", "workspaceContains:**/*.ddot"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "ddot.it",
+        "aliases": ["ddot.it","ddot"],
+        "extensions": [".ddot"],
+        "icon": {
+          "light": "./icon-dark.svg",
+          "dark": "./icon.svg"
+        } 
+      }
+    ],
+    "grammars": [
+      {
+        "language": "ddot.it",
+        "scopeName": "source.ddot",
+        "path": "./syntaxes/ddot.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "ddot.it",
+        "path": "./snippets/ddot.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "ddot.validate",
+        "title": "ddot.it: Validate Document",
+        "description": "Validate the current ddot.it document for syntax errors"
+      },
+      {
+        "command": "ddot.format",
+        "title": "ddot.it: Format Document",
+        "description": "Format the current ddot.it document"
+      },
+      {
+        "command": "ddot.exportJson",
+        "title": "ddot.it: Export as JSON",
+        "description": "Export the current ddot.it document as a JSON representation"
+      }
+    ]
+  }
+}

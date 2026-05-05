@@ -1,0 +1,27 @@
+{
+  "Typed Link": {
+    "prefix": "ddot-typed",
+    "body": "${1:subject} .. ${2:type} .. ${3:object}",
+    "description": "Create a typed link: subject .. type .. object"
+  },
+  "Simple Link": {
+    "prefix": "ddot-link",
+    "body": "${1:subject} .... ${2:object}",
+    "description": "Create a simple link: subject .... object"
+  },
+  "Property with Metadata": {
+    "prefix": "ddot-property",
+    "body": "${1:subject} .. ${2:property} .. ${3:value} ,, ${4:metadata}",
+    "description": "Create a property with metadata: subject .. property .. value ,, metadata"
+  },
+  "Continued Property": {
+    "prefix": "ddot-continue",
+    "body": ".. ${1:property} .. ${2:value}",
+    "description": "Continue with another property on the same subject"
+  },
+  "Metadata": {
+    "prefix": "ddot-meta",
+    "body": ",, ${1:key} :: ${2:value}",
+    "description": "Add metadata to a triple"
+  }
+}
