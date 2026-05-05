@@ -1,7 +1,7 @@
 {
   "name": "ddot-vscode-extension",
   "displayName": "ddot.it syntax highlighting",
-  "publisher": "Calpano.com",
+  "publisher": "calpano",
   "version": "0.0.1",
   "engines": { "vscode": "^1.50.0" },
   "scripts": {

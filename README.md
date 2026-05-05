@@ -2,6 +2,22 @@
 
 Authoring support for **ddot.it**, a minimal text format for typed knowledge graphs. Each line is a triple — `subject ..predicate.. object` — written with double-dot separators.
 
+## Facts
+License: MIT
+
+## Meta
+```ddot.it
+ddot.it/vscode ..has type.. VSCode extension
+..syntax.. ddot.it
+..provides.. syntax highlighting
+..provides.. smart autocompletion
+..provides.. code folding
+..provides.. outline of all subjects
+
+ddot.it .. url .. https://ddot.it
+```
+
+
 ## What is ddot.it?
 
 [ddot.it](https://ddot.it) is a line-oriented graph notation built around two separators:

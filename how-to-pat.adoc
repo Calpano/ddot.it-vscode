@@ -1,0 +1,11 @@
+= How to get a PAT for VSCode Marketplace
+
+- Have an Azure DevOps organization
+- Go to https://dev.azure.com and sign in with the Microsoft account tied to the publisher.
+- Go to  https://dev.azure.com/<your-org>/_usersSettings/tokens
+- Click + New Token.
+- Name: `vscode-marketplace-publish` (anything).
+- Organization: **select All accessible organizations** (a token scoped to one org won't work for Marketplace).
+- Expiration: up to 1 year. Set a calendar reminder.
+- Scopes: click Show all scopes at the bottom (it's hidden by default!), then under Marketplace check Manage. Uncheck everything else.
+- Create → copy the token immediately. It's shown only once.
