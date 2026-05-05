@@ -3,7 +3,7 @@
   "displayName": "ddot.it syntax highlighting",
   "publisher": "calpano",
   "version": "0.0.1",
-  "engines": { "vscode": "^1.50.0" },
+  "engines": { "vscode": "^1.76.0" },
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
