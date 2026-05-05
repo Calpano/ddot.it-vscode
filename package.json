@@ -1,9 +1,9 @@
 {
   "name": "ddot",
-  "displayName": "ddot.it — Knowledge Graph Notation",
+  "displayName": "ddot.it: Knowledge Graphs",
   "description": "Authoring support for ddot.it — a minimal notation for knowledge graphs.",
   "publisher": "calpano",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "engines": { "vscode": "^1.76.0" },
   "icon": "icon-128.png",
   "categories": ["Programming Languages", "Snippets"],
