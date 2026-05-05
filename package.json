@@ -3,8 +3,9 @@
   "displayName": "ddot.it — Knowledge Graph Notation",
   "description": "Authoring support for ddot.it — a minimal line-oriented notation for typed knowledge graphs.",
   "publisher": "calpano",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "engines": { "vscode": "^1.76.0" },
+  "icon": "icon-128.png",
   "categories": ["Programming Languages", "Snippets"],
   "keywords": ["ddot.it", "ddot", "knowledge graph", "triples", "rdf", "graph notation"],
   "repository": {
