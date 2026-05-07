@@ -2,17 +2,33 @@
   "scopeName": "source.ddot",
   "name": "ddot.it",
   "patterns": [
+    { "include": "#disabled" },
     { "include": "#metadata" },
     { "include": "#triples" },
     { "include": "#additional" },
     { "include": "#commands" }
   ],
   "repository": {
+    "disabled": {
+      "patterns": [
+        {
+          "name": "comment.block.disabled.ddot",
+          "begin": "(?:\\bddot\\.it/off\\b|!!off\\b)",
+          "end": "(?:\\bddot\\.it/on\\b|!!on\\b)",
+          "beginCaptures": {
+            "0": { "name": "keyword.control.ddot" }
+          },
+          "endCaptures": {
+            "0": { "name": "keyword.control.ddot" }
+          }
+        }
+      ]
+    },
     "commands": {
       "patterns": [
         {
           "name": "keyword.control.ddot",
-          "match": "\\b(ddot\\.it(?:/(?:this|on|off))?|!!)\\b"
+          "match": "\\bddot\\.it(?:/[A-Za-z][A-Za-z0-9_-]*)?\\b|!!(?:[A-Za-z][A-Za-z0-9_-]*)?"
         }
       ]
     },
@@ -50,34 +66,48 @@
     "metadata_triples": {
       "patterns": [
         {
-          "name": "comment.metadata.bold.triple.ddot",
-          "match": "^\\s*((?:(?!\\.\\.|,,).)+?)\\s*(\\.\\.)\\s*((?:(?!\\.\\.|,,).)+?)\\s*(\\.\\.)\\s*((?:(?!\\.\\.|,,).)+?)(?=\\s*(?:,,|$))",
+          "match": "\\s*((?:(?!\\.\\.|,,).)+?)\\s*(\\.\\.)\\s*((?:(?!\\.\\.|,,).)+?)\\s*(\\.\\.)\\s*((?:(?!\\.\\.|,,).)+?)(?=\\s*(?:,,|$))",
           "captures": {
-            "1": { "name": "comment.metadata.bold.ddot" },
-            "2": { "name": "comment.metadata.bold.ddot" },
-            "3": { "name": "comment.metadata.bold.ddot" },
-            "4": { "name": "comment.metadata.bold.ddot" },
-            "5": { "name": "comment.metadata.bold.ddot" }
+            "1": { "name": "comment.metadata.subject.ddot" },
+            "2": { "name": "comment.metadata.operator.ddot" },
+            "3": { "name": "comment.metadata.relation.ddot" },
+            "4": { "name": "comment.metadata.operator.ddot" },
+            "5": { "name": "comment.metadata.object.ddot" }
           }
         },
         {
-          "name": "comment.metadata.bold.triple.ddot",
-          "match": "^\\s*(\\.\\.)\\s*((?:(?!\\.\\.|,,).)+?)\\s*(\\.\\.)\\s*((?:(?!\\.\\.|,,).)+?)(?=\\s*(?:,,|$))",
+          "match": "\\s*(\\.\\.)\\s*((?:(?!\\.\\.|,,).)+?)\\s*(\\.\\.)\\s*((?:(?!\\.\\.|,,).)+?)(?=\\s*(?:,,|$))",
           "captures": {
-            "1": { "name": "comment.metadata.bold.ddot" },
-            "2": { "name": "comment.metadata.bold.ddot" },
-            "3": { "name": "comment.metadata.bold.ddot" },
-            "4": { "name": "comment.metadata.bold.ddot" }
+            "1": { "name": "comment.metadata.operator.ddot" },
+            "2": { "name": "comment.metadata.relation.ddot" },
+            "3": { "name": "comment.metadata.operator.ddot" },
+            "4": { "name": "comment.metadata.object.ddot" }
           }
         },
         {
-          "name": "comment.metadata.bold.ddot",
+          "match": "\\s*(\\.\\.\\.\\.|\\.\\.\\s*\\.\\.)\\s*((?:(?!\\.\\.|,,).)+?)(?=\\s*(?:,,|$))",
+          "captures": {
+            "1": { "name": "comment.metadata.operator.ddot" },
+            "2": { "name": "comment.metadata.object.ddot" }
+          }
+        },
+        {
+          "name": "comment.metadata.operator.ddot",
           "match": "\\.\\.\\.\\.|\\.\\."
         }
       ]
     },
     "triples": {
       "patterns": [
+        {
+          "name": "meta.triple.untyped.ddot",
+          "match": "^\\s*((?:(?!\\.\\.|,,).)+?)\\s*(\\.\\.\\.\\.|\\.\\.\\s*\\.\\.)\\s*((?:(?!\\.\\.|,,).)+?)(?=\\s*(?:,,|$))",
+          "captures": {
+            "1": { "patterns": [ { "include": "#commands" }, { "match": ".+", "name": "entity.name.subject.ddot" } ] },
+            "2": { "name": "entity.name.operator.ddot" },
+            "3": { "patterns": [ { "include": "#commands" }, { "match": ".+", "name": "entity.name.object.ddot" } ] }
+          }
+        },
         {
           "name": "meta.triple.typed.ddot",
           "match": "^\\s*((?:(?!\\.\\.|,,).)+?)\\s*(\\.\\.)\\s*((?:(?!\\.\\.|,,).)+?)\\s*(\\.\\.)\\s*((?:(?!\\.\\.|,,).)+?)(?=\\s*(?:,,|$))",
@@ -88,20 +118,19 @@
             "4": { "name": "entity.name.operator.ddot" },
             "5": { "patterns": [ { "include": "#commands" }, { "match": ".+", "name": "entity.name.object.ddot" } ] }
           }
-        },
-        {
-          "name": "meta.triple.untyped.ddot",
-          "match": "^\\s*((?:(?!\\.\\.|,,).)+?)\\s*(\\.\\.\\.\\.|\\.\\.\\s*\\.\\.)\\s*((?:(?!\\.\\.|,,).)+?)(?=\\s*(?:,,|$))",
-          "captures": {
-            "1": { "patterns": [ { "include": "#commands" }, { "match": ".+", "name": "entity.name.subject.ddot" } ] },
-            "2": { "name": "entity.name.operator.ddot" },
-            "3": { "patterns": [ { "include": "#commands" }, { "match": ".+", "name": "entity.name.object.ddot" } ] }
-          }
         }
       ]
     },
     "additional": {
       "patterns": [
+        {
+          "name": "meta.triple.additional.untyped.ddot",
+          "match": "^\\s*(\\.\\.\\.\\.|\\.\\.\\s*\\.\\.)\\s*((?:(?!\\.\\.|,,).)+?)(?=\\s*(?:,,|$))",
+          "captures": {
+            "1": { "name": "entity.name.operator.ddot" },
+            "2": { "patterns": [ { "include": "#commands" }, { "match": ".+", "name": "entity.name.object.ddot" } ] }
+          }
+        },
         {
           "name": "meta.triple.additional.typed.ddot",
           "match": "^\\s*(\\.\\.)\\s*((?:(?!\\.\\.|,,).)+?)\\s*(\\.\\.)\\s*((?:(?!\\.\\.|,,).)+?)(?=\\s*(?:,,|$))",
@@ -110,14 +139,6 @@
             "2": { "patterns": [ { "include": "#commands" }, { "match": ".+", "name": "entity.name.relation.ddot" } ] },
             "3": { "name": "entity.name.operator.ddot" },
             "4": { "patterns": [ { "include": "#commands" }, { "match": ".+", "name": "entity.name.object.ddot" } ] }
-          }
-        },
-        {
-          "name": "meta.triple.additional.untyped.ddot",
-          "match": "^\\s*(\\.\\.\\.\\.|\\.\\.\\s*\\.\\.)\\s*((?:(?!\\.\\.|,,).)+?)(?=\\s*(?:,,|$))",
-          "captures": {
-            "1": { "name": "entity.name.operator.ddot" },
-            "2": { "patterns": [ { "include": "#commands" }, { "match": ".+", "name": "entity.name.object.ddot" } ] }
           }
         }
       ]

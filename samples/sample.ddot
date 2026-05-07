@@ -17,3 +17,17 @@ Dirk Hagemann ..works at.. SAP ,,
 
 Command
 ddot.it/this ..is.. "a sample document"
+
+Shorthand !! (== ddot.it/)
+!!this ..is.. "the same document"
+
+Off span (flat comment until matching on)
+ddot.it/off
+This line is muted ..and so is.. this triple
+..and.. this continuation
+ddot.it/on
+
+Shorthand off span
+!!off
+also muted ..relation.. value
+!!on
