@@ -754,7 +754,8 @@ function extractTriple(
   seps: string[],
   inheritedSubject: string | null
 ): { from: string; type?: string; to: string } | null {
-  // Typed link: `from ..type.. to`  (continuation: `..type.. to`)
+  // Typed link: `from ..type.. to`  (continuation: `..type.. to`).
+  // Empty type ⇒ `.. ..` form, a typographic variant of `....` (untyped).
   if (
     segments.length === 3 &&
     seps.length === 2 &&
@@ -762,9 +763,10 @@ function extractTriple(
     seps[1] === '..'
   ) {
     const [s, p, o] = segments;
-    if (!o || !p) return null;
+    if (!o) return null;
     const from = s !== '' ? s : inheritedSubject;
     if (!from) return null;
+    if (!p) return { from, to: o };
     return { from, type: p, to: o };
   }
   // Simple link: `from .... to`  (continuation: `.... to`)
@@ -786,10 +788,24 @@ function parseDocument(document: vscode.TextDocument): DdotEvent[] {
 
   let currentSubject: string | null = null;
   let openMetaEvent: DdotEvent | null = null;
+  let off = false;
 
   for (let i = 0; i < lines.length; i++) {
     const trimmed = lines[i].trim();
     if (trimmed === '') continue;
+
+    // Both forms are equivalent: `!!` is shorthand for `ddot.it/`.
+    if (trimmed === 'ddot.it/off' || trimmed === '!!off') {
+      off = true;
+      // An open multi-line meta block can't survive an off span; close it.
+      openMetaEvent = null;
+      continue;
+    }
+    if (trimmed === 'ddot.it/on' || trimmed === '!!on') {
+      off = false;
+      continue;
+    }
+    if (off) continue;
 
     // Inside an open multi-line metadata block: each non-`,,` line is a
     // ..key.. value pair appended to the previous event's meta array.

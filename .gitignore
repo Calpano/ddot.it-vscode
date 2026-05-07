@@ -3,3 +3,6 @@ out/
 .idea/inspectionProfiles
 ddot.it-vscode.iml
 .idea
+
+# Grammar bundled at install time from @calpano/ddot-textmate-grammar
+syntaxes/ddot.tmLanguage.json
