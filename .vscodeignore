@@ -14,3 +14,4 @@ package-lock.json
 how-to-pat.adoc
 .gitignore
 scripts/**
+.claude/**
