@@ -13,13 +13,28 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    defaults:
+      run:
+        working-directory: ddot.it-vscode
     env:
       OVSX_PAT: ${{ secrets.OVSX_PAT }}
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
     steps:
-      - uses: actions/checkout@v5
+      # Sibling checkouts — the @calpano/ddot-textmate-grammar dep is wired
+      # as `file:../ddot.it-syntax-tools/textmate` until that package is
+      # published to npm.
+      - name: Checkout ddot.it-vscode
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          path: ddot.it-vscode
 
-      - uses: actions/setup-node@v5
+      - name: Checkout ddot.it-syntax-tools (canonical grammar source)
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          repository: Calpano/ddot.it-syntax-tools
+          path: ddot.it-syntax-tools
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: '24'
 
@@ -30,16 +45,16 @@ jobs:
         run: npx --yes @vscode/vsce package --out ddot-vscode-extension-${{ github.ref_name }}.vsix
 
       - name: Upload VSIX artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: vsix
-          path: '*.vsix'
+          path: ddot.it-vscode/*.vsix
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
-          files: '*.vsix'
+          files: ddot.it-vscode/*.vsix
           generate_release_notes: true
 
       - name: Publish to VS Code Marketplace
