@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { DdotEvent, parseEvents, toJsonl } from './events';
 
 const DDOT_LANGUAGE = 'ddot.it';
 
@@ -10,43 +11,22 @@ const DDOT_LANGUAGE = 'ddot.it';
 //   Simple link:       `subject .... object`
 //   Continuation:      `.... object`
 // Metadata `,,` splits a line into independently-formatted parts joined by ` ,, `.
+// subject .. relation .. object (relation empty ⇒ untyped `....`). Subject and relation contain no `..`;
+// the object is the rest and may contain `..` (a URL or relative path) as long as the operator is followed
+// by a non-dot — matching the canonical parser (DdotEventExporter) and the TextMate grammar.
+const TRIPLE_RE = /^((?:(?!\.\.).)*)\.\.((?:(?!\.\.).)*)\.\.((?!\.).+)$/;
+
 function formatDdotPart(text: string): string {
-  const segments: string[] = [];
-  const seps: string[] = [];
-  let lastIdx = 0;
-  const sepRegex = /\.{4}|\.{2}/g;
-  let m: RegExpExecArray | null;
-  while ((m = sepRegex.exec(text)) !== null) {
-    segments.push(text.substring(lastIdx, m.index).trim());
-    seps.push(m[0]);
-    lastIdx = m.index + m[0].length;
-  }
-  segments.push(text.substring(lastIdx).trim());
+  const m = TRIPLE_RE.exec(text);
+  if (!m) return text.trim(); // not a well-formed triple — leave it alone rather than guess
 
-  if (seps.length === 0) return segments[0];
-
-  // subject .. predicate .. object
-  if (seps.length === 2 && seps[0] === '..' && seps[1] === '..') {
-    const [s, p, o] = segments;
-    const head = s === '' ? `..${p}..` : `${s} ..${p}..`;
-    return o === '' ? head : `${head} ${o}`;
-  }
-
-  // subject .... object
-  if (seps.length === 1 && seps[0] === '....') {
-    const [s, o] = segments;
-    const head = s === '' ? `....` : `${s} ....`;
-    return o === '' ? head : `${head} ${o}`;
-  }
-
-  // Fallback: rebuild verbatim with trimmed segments — leave malformed lines
-  // alone rather than guess.
-  let out = '';
-  for (let i = 0; i < segments.length; i++) {
-    out += segments[i];
-    if (i < seps.length) out += seps[i];
-  }
-  return out;
+  const s = m[1].trim();
+  const p = m[2].trim();
+  const o = m[3].trim();
+  const head = p === ''
+    ? (s === '' ? `....` : `${s} ....`)
+    : (s === '' ? `..${p}..` : `${s} ..${p}..`);
+  return o === '' ? head : `${head} ${o}`;
 }
 
 function formatDdotLine(line: string): string {
@@ -165,8 +145,234 @@ class DdotDocumentSymbolProvider implements vscode.DocumentSymbolProvider {
 }
 
 // Completion Provider
-type Role = 'subject' | 'predicate' | 'object';
-const ROLES: Role[] = ['subject', 'predicate', 'object'];
+//
+// Slot detection follows ddot-it-autocomplete.adoc#cursor-state: run the parse
+// automaton over the line prefix and read the slot off the state it reaches.
+// There is deliberately no second grammar — the automaton is prefix-driven, so
+// a half-written line lands in a sensible state on its own (typing `Dir`
+// reaches Subject), and it is defined over real DT2/DT4 tokens, so stray runs
+// of dots cannot be miscounted as separators.
+type Role = 'subject' | 'predicate' | 'object' | 'meta-relation' | 'meta-object';
+
+// The Autocomplete Specification's query catalog: for each cursor slot, the
+// pools to draw on in ranking order. The two families are value-like
+// (s / o / mo) and relation-like (p / mr); each query lists its own slot, then
+// the rest of its family, then the other family. A relation-like cursor never
+// leaves its family.
+const QUERY_CATALOG: Record<Role, Role[]> = {
+  subject: ['subject', 'object', 'meta-object', 'predicate', 'meta-relation'],
+  predicate: ['predicate', 'meta-relation'],
+  object: ['object', 'subject', 'meta-object', 'predicate', 'meta-relation'],
+  'meta-relation': ['meta-relation', 'predicate'],
+  'meta-object': ['meta-object', 'object', 'subject', 'meta-relation', 'predicate'],
+};
+const ROLES: Role[] = [
+  'subject',
+  'predicate',
+  'object',
+  'meta-relation',
+  'meta-object',
+];
+
+// --- lexical tokens (Parse Spec, "Token Sequences") ------------------------
+// Runs of EXACTLY n, neither preceded nor followed by the same character. The
+// lookarounds are load-bearing: `\.{2}` alone matches the first two dots of
+// `...`, which the tokenization rule forbids.
+const DT2_SRC = String.raw`(?<!\.)\.{2}(?!\.)`;
+const QUAD_SRC = String.raw`(?<!\.)(?:\.{4}|\.{2}[ \t]+\.{2})(?!\.)`;
+const CM2_SRC = String.raw`(?<!,),,(?!,)`;
+const SC2_SRC = String.raw`(?<!;);;(?!;)`;
+// A command needs the slash and a non-empty name; bare `ddot.it` is not one.
+// `?` and `#` do not terminate a command — they introduce its query/fragment.
+const CMD_SRC = String.raw`(?:(?:https?://)?ddot\.it/|!!)[^\s?#]+(?:\?[^\s#]*)?(?:#\S*)?`;
+const BLOCK_SRC = String.raw`(?:(?:https?://)?ddot\.it/|!!)block`;
+
+const CMD_RE = new RegExp(CMD_SRC);
+const CMD_ONLY_RE = new RegExp(`^${CMD_SRC}$`);
+// Recognised ANYWHERE on a line, so the usual host-language comment forms work:
+// `<!-- ddot.it/off -->`, `# !!off`, `// !!on`. `(?![^\s?#])` pins the command
+// name so `!!office` is not `!!off`.
+const OFF_RE = /(?:(?:https?:\/\/)?ddot\.it\/|!!)off(?![^\s?#])/;
+const ON_RE = /(?:(?:https?:\/\/)?ddot\.it\/|!!)on(?![^\s?#])/;
+// A block opener must END its physical line (block-as-field).
+const BLOCK_OPENER_RE = new RegExp(`${BLOCK_SRC}(?:\\?end=(\\S+))?[ \t]*$`);
+
+// Significant tokens, QUAD before DT2 so `.. ..` is ONE operator, not two.
+const SIGNIFICANT_RE = new RegExp(
+  `${QUAD_SRC}|${DT2_SRC}|${CM2_SRC}|${SC2_SRC}`,
+  'g'
+);
+
+type AutomatonState =
+  | 'StartOfLine'
+  | 'Subject'
+  | 'RelationStart'
+  | 'Relation'
+  | 'ObjectStart'
+  | 'TripleObject'
+  | 'MetaStart'
+  | 'MetaRelationInline'
+  | 'MetaObjectInline'
+  | 'MetaNextInline'
+  | 'MetaTextInline'
+  | 'NotATriple';
+
+// Automaton state → the slot whose candidates should be offered. States with
+// no entry offer nothing (meta text, NotATriple).
+const SLOT_OF: Partial<Record<AutomatonState, Role>> = {
+  StartOfLine: 'subject',
+  Subject: 'subject',
+  RelationStart: 'predicate',
+  Relation: 'predicate',
+  ObjectStart: 'object',
+  TripleObject: 'object',
+  MetaStart: 'meta-relation',
+  MetaRelationInline: 'meta-relation',
+  MetaNextInline: 'meta-relation',
+  MetaObjectInline: 'meta-object',
+};
+
+function onText(state: AutomatonState): AutomatonState {
+  switch (state) {
+    case 'StartOfLine':
+      return 'Subject';
+    case 'RelationStart':
+      return 'Relation';
+    case 'ObjectStart':
+      return 'TripleObject';
+    // Text after `,,` with no `..` is meta TEXT, not a meta relation.
+    case 'MetaStart':
+      return 'MetaTextInline';
+    case 'MetaNextInline':
+      return 'NotATriple';
+    default:
+      return state;
+  }
+}
+
+function onToken(state: AutomatonState, tok: string): AutomatonState {
+  const isQuad = /^\.{4}$|^\.{2}[ \t]+\.{2}$/.test(tok);
+  const isDot = isQuad || /^\.{2}$/.test(tok);
+  const isComma = /^,,$/.test(tok);
+  const isSemi = /^;;$/.test(tok);
+
+  if (isQuad) {
+    // QuadDot carries the implicit relation, so the relation slot is skipped.
+    switch (state) {
+      case 'StartOfLine':
+      case 'Subject':
+        return 'ObjectStart';
+      case 'MetaStart':
+      case 'MetaNextInline':
+        return 'MetaObjectInline';
+      case 'TripleObject':
+      case 'MetaObjectInline':
+        return state; // an object may contain `..`
+      default:
+        return 'NotATriple';
+    }
+  }
+  if (isDot) {
+    switch (state) {
+      case 'StartOfLine':
+      case 'Subject':
+        return 'RelationStart';
+      case 'RelationStart': // `.. ..` typed as two separate DT2
+      case 'Relation':
+        return 'ObjectStart';
+      case 'TripleObject':
+        return 'TripleObject'; // the object may contain `..`
+      case 'MetaStart':
+      case 'MetaNextInline':
+        return 'MetaRelationInline';
+      case 'MetaRelationInline':
+        return 'MetaObjectInline';
+      case 'MetaObjectInline':
+        return 'MetaObjectInline';
+      default:
+        return 'NotATriple';
+    }
+  }
+  if (isComma) {
+    switch (state) {
+      case 'TripleObject':
+      case 'ObjectStart':
+        return 'MetaStart';
+      default:
+        return 'NotATriple';
+    }
+  }
+  if (isSemi) {
+    // `;;` separates inline meta pairs; elsewhere it is ordinary text.
+    return state === 'MetaObjectInline' ? 'MetaNextInline' : state;
+  }
+  return state;
+}
+
+// Run the automaton over the text before the cursor and return the slot.
+function slotForLinePrefix(prefix: string): Role | null {
+  let state: AutomatonState = 'StartOfLine';
+  let last = 0;
+  for (const m of prefix.matchAll(SIGNIFICANT_RE)) {
+    if (prefix.slice(last, m.index).trim() !== '') state = onText(state);
+    state = onToken(state, m[0]);
+    last = (m.index ?? 0) + m[0].length;
+  }
+  if (prefix.slice(last).trim() !== '') state = onText(state);
+  return SLOT_OF[state] ?? null;
+}
+
+// Name -> occurrence count. Counts, not a set, because the ranking spec orders
+// candidates by descending corpus frequency (key 6); a set only records that a
+// name exists, so a one-off typo would rank level with the most-used relation.
+type Vocabulary = Record<Role, Map<string, number>>;
+
+function emptyIndex(): Vocabulary {
+  return {
+    subject: new Map(),
+    predicate: new Map(),
+    object: new Map(),
+    'meta-relation': new Map(),
+    'meta-object': new Map(),
+  };
+}
+
+type Region = 'plain' | 'excluded' | 'verbatim';
+
+// Which pre-parse region a line sits in. Completion is silent in the inert
+// ones (autocomplete spec, "Where completion fires").
+function regionAt(document: vscode.TextDocument, line: number): Region {
+  let region: Region = 'plain';
+  let blockEnd: string | null = null;
+  for (let i = 0; i < line; i++) {
+    const text = document.lineAt(i).text;
+    if (region === 'excluded') {
+      if (ON_RE.test(text)) region = 'plain';
+      continue;
+    }
+    if (region === 'verbatim') {
+      if (blockEnd !== null) {
+        if (text.trim() === blockEnd) {
+          region = 'plain';
+          blockEnd = null;
+        }
+      } else if (text.trim() === '') {
+        region = 'plain';
+      }
+      continue;
+    }
+    if (OFF_RE.test(text)) {
+      region = 'excluded';
+      continue;
+    }
+    const opener = BLOCK_OPENER_RE.exec(text);
+    if (opener) {
+      region = 'verbatim';
+      blockEnd = opener[1] ?? null;
+    }
+  }
+  return region;
+}
 
 // Returns the start index of a `..` separator that immediately precedes
 // the cursor (allowing for trailing whitespace), but only if it's an
@@ -199,73 +405,148 @@ function isContinuationContext(
 }
 
 class DdotCompletionProvider implements vscode.CompletionItemProvider {
-  private entitiesByRole: Record<Role, Set<string>> = {
-    subject: new Set(),
-    predicate: new Set(),
-    object: new Set(),
-  };
+  // Candidates from the file being edited, and from every other indexed file.
+  // The spec ranks same-file above other-file, so they are kept apart.
+  private sameFile: Vocabulary = emptyIndex();
+  private otherFiles: Vocabulary = emptyIndex();
 
-  // Walk a line, calling `visit` on each (segment text, role) pair.
-  // `..` advances one slot; `....` skips predicate (advances two).
-  private walkSegments(
-    line: string,
-    visit: (text: string, role: Role, start: number, end: number) => void
-  ) {
-    const beforeMeta = line.split(',,')[0];
-    let slot = 0;
-    let lastIdx = 0;
-    const sepRegex = /\.{4}|\.{2}/g;
-    let m: RegExpExecArray | null;
-    while ((m = sepRegex.exec(beforeMeta)) !== null) {
-      visit(beforeMeta.substring(lastIdx, m.index), ROLES[Math.min(slot, 2)], lastIdx, m.index);
-      slot += m[0].length === 4 ? 2 : 1;
-      lastIdx = m.index + m[0].length;
+  // Command names seen anywhere, beyond the four built-ins.
+  private corpusCommands = new Set<string>();
+
+  // Harvest every slot value on a line by running the same automaton used for
+  // cursor detection, so indexing and completion always agree about slots.
+  private harvest(line: string, into: Vocabulary) {
+    let state: AutomatonState = 'StartOfLine';
+    let last = 0;
+    const add = (text: string, st: AutomatonState) => {
+      const value = text.trim();
+      if (!value) return;
+      const role = SLOT_OF[st];
+      // Every occurrence counts, including repeats within one file.
+      if (role) into[role].set(value, (into[role].get(value) ?? 0) + 1);
+      const cmd = CMD_RE.exec(value);
+      if (cmd && CMD_ONLY_RE.test(value)) {
+        const name = value.replace(/^(?:(?:https?:\/\/)?ddot\.it\/|!!)/, '')
+          .replace(/[?#].*$/, '');
+        if (name) this.corpusCommands.add(name);
+      }
+    };
+    for (const m of line.matchAll(SIGNIFICANT_RE)) {
+      const between = line.slice(last, m.index);
+      if (between.trim() !== '') {
+        add(between, onText(state));
+        state = onText(state);
+      }
+      state = onToken(state, m[0]);
+      last = (m.index ?? 0) + m[0].length;
     }
-    visit(beforeMeta.substring(lastIdx), ROLES[Math.min(slot, 2)], lastIdx, beforeMeta.length);
+    const tail = line.slice(last);
+    if (tail.trim() !== '') add(tail, onText(state));
+  }
+
+  private indexText(text: string, into: Vocabulary) {
+    const lines = text.split('\n');
+    let region: Region = 'plain';
+    let blockEnd: string | null = null;
+    for (const line of lines) {
+      // Inert regions contribute no candidates.
+      if (region === 'excluded') {
+        if (ON_RE.test(line)) region = 'plain';
+        continue;
+      }
+      if (region === 'verbatim') {
+        if (blockEnd !== null) {
+          if (line.trim() === blockEnd) { region = 'plain'; blockEnd = null; }
+        } else if (line.trim() === '') region = 'plain';
+        continue;
+      }
+      if (OFF_RE.test(line)) { region = 'excluded'; continue; }
+      const opener = BLOCK_OPENER_RE.exec(line);
+      if (opener) { region = 'verbatim'; blockEnd = opener[1] ?? null; }
+      this.harvest(line, into);
+    }
+  }
+
+  // Other indexed files. Cached; refreshed when the workspace changes.
+  private otherFilesLoaded = false;
+  async loadOtherFiles(current: vscode.Uri) {
+    this.otherFiles = emptyIndex();
+    const uris = await vscode.workspace.findFiles('**/*.ddot', '**/node_modules/**', 500);
+    for (const uri of uris) {
+      if (uri.toString() === current.toString()) continue;
+      try {
+        const doc = await vscode.workspace.openTextDocument(uri);
+        this.indexText(doc.getText(), this.otherFiles);
+      } catch {
+        // unreadable file: skip it rather than fail the whole completion
+      }
+    }
+    this.otherFilesLoaded = true;
+  }
+
+  invalidateOtherFiles() {
+    this.otherFilesLoaded = false;
   }
 
   updateEntities(document: vscode.TextDocument) {
-    for (const role of ROLES) this.entitiesByRole[role].clear();
-
-    for (const line of document.getText().split('\n')) {
-      const trimmed = line.trim();
-      if (trimmed === '') continue;
-
-      // Only index when the line has fully-formed link syntax following the
-      // subject: either two `..` separators (..rel..) or one `....`.
-      // Partial lines like `subject ..` or `subject ..rel` are skipped.
-      const seps: string[] = trimmed.match(/\.{4}|\.{2}/g) ?? [];
-      const dotDotCount = seps.filter((s) => s === '..').length;
-      const hasSimple = seps.includes('....');
-      if (dotDotCount < 2 && !hasSimple) continue;
-
-      this.walkSegments(trimmed, (text, role) => {
-        const entity = text.trim();
-        if (!entity || entity.includes('::')) return;
-        this.entitiesByRole[role].add(entity);
-      });
-    }
+    this.sameFile = emptyIndex();
+    this.corpusCommands = new Set();
+    this.indexText(document.getText(), this.sameFile);
+    if (!this.otherFilesLoaded) void this.loadOtherFiles(document.uri);
   }
 
-  // Determine which role the cursor is currently authoring on its line.
-  // Returns null when past a ,, (metadata, not an entity slot).
+  // Candidates for a slot, in the Autocomplete Specification's query-catalog
+  // order (pool first, then same-file before other-file). VS Code preserves the
+  // order we return when `sortText` is set, so the rank is encoded there.
+  //
+  // Breadth is deliberate: an entity named as a subject elsewhere is a perfectly
+  // good object, so the object query is `o, s, mo, p, mr`. Relation-like slots
+  // stay inside their own family — offering values where a relation name belongs
+  // would be a category error.
+  private candidates(
+    role: Role
+  ): Array<{ value: string; here: boolean; from: Role; pool: number }> {
+    const out: Array<{ value: string; here: boolean; from: Role; pool: number }> = [];
+    const seen = new Set<string>();
+    const pools = QUERY_CATALOG[role];
+    // Within a (pool, locality) group: descending frequency (key 6), then
+    // alphabetically (key 7). Map iteration order is insertion order, which
+    // would otherwise make the list depend on which file was indexed first.
+    const byRank = (
+      [aName, aCount]: [string, number],
+      [bName, bCount]: [string, number]
+    ): number => {
+      if (aCount !== bCount) return bCount - aCount;
+      const a = aName.toLowerCase();
+      const b = bName.toLowerCase();
+      if (a !== b) return a < b ? -1 : 1;
+      return aName < bName ? -1 : aName > bName ? 1 : 0;
+    };
+    for (let pool = 0; pool < pools.length; pool++) {
+      const from = pools[pool];
+      for (const here of [true, false]) {
+        const source = here ? this.sameFile[from] : this.otherFiles[from];
+        for (const [v] of [...source].sort(byRank)) {
+          if (seen.has(v)) continue;
+          seen.add(v);
+          out.push({ value: v, here, from, pool });
+        }
+      }
+    }
+    return out;
+  }
+
+  // Which slot the cursor is authoring, per ddot-it-autocomplete.adoc#cursor-state.
+  // Returns null in meta text, on a NotATriple line, and in inert regions.
   private getCursorRole(
     document: vscode.TextDocument,
     position: vscode.Position
   ): Role | null {
+    if (regionAt(document, position.line) !== 'plain') return null;
     const beforeCursor = document
       .lineAt(position.line)
       .text.substring(0, position.character);
-
-    if (beforeCursor.includes(',,')) return null;
-
-    let slot = 0;
-    const sepRegex = /\.{4}|\.{2}/g;
-    let m: RegExpExecArray | null;
-    while ((m = sepRegex.exec(beforeCursor)) !== null) {
-      slot += m[0].length === 4 ? 2 : 1;
-    }
-    return ROLES[Math.min(slot, 2)];
+    return slotForLinePrefix(beforeCursor);
   }
 
   // Find the range of the entity-in-progress at the cursor: from after the
@@ -279,7 +560,7 @@ class DdotCompletionProvider implements vscode.CompletionItemProvider {
       .text.substring(0, position.character);
 
     let lastSepEnd = 0;
-    const sepRegex = /\.{4}|\.{2}|,,|::/g;
+    const sepRegex = new RegExp(`${QUAD_SRC}|${DT2_SRC}|${CM2_SRC}|${SC2_SRC}`, 'g');
     let m: RegExpExecArray | null;
     while ((m = sepRegex.exec(beforeCursor)) !== null) {
       lastSepEnd = m.index + m[0].length;
@@ -311,30 +592,91 @@ class DdotCompletionProvider implements vscode.CompletionItemProvider {
       .lineAt(position.line)
       .text.substring(0, position.character);
 
-    // Bail out when the user has typed a stray 3-dot run (only `..` and
-    // `....` are valid). A 3-dot tail not preceded by another dot means
-    // they typed a third dot after `..` — hide the menu.
-    if (/(^|[^.])\.{3}$/.test(beforeCursor)) return [];
+    // NOTE: there used to be a bail-out here for a stray 3-dot run. It existed
+    // to paper over slot detection that counted raw `..` occurrences and so
+    // mis-read `...` as a separator. The automaton is defined over DT2/DT4, for
+    // which `...` is ordinary text, so the special case is unnecessary — and it
+    // was harmful: it suppressed the `....` separator snippet at exactly the
+    // moment the user was typing toward it.
 
     const items: vscode.CompletionItem[] = [];
     const entityRange = this.getEntityRange(document, position);
     const prefix = document.getText(entityRange);
     const role = this.getCursorRole(document, position);
 
-    // Separator snippets — gated by what's syntactically valid at this slot.
-    // role=subject  → `..` (advance to pred), `....` (skip pred to obj)
-    // role=predicate → `..` (close predicate)
-    // role=object   → `,,` (start metadata)
-    // role=null (past ,,, in metadata) → `..` (key/value sep), `,,` (close)
+    // ── Command completion ────────────────────────────────────────────
+    // All four spellings trigger it, not just `!!`. Built-ins first (ranked
+    // by slot-appropriateness), then commands harvested from the corpus.
+    const cmdStart = /(?:(?:https?:\/\/)?ddot\.it\/|!!)([^\s?#]*)$/.exec(beforeCursor);
+    if (cmdStart) {
+      const typed = cmdStart[1] ?? '';
+      const cmdRange = new vscode.Range(
+        new vscode.Position(position.line, position.character - typed.length),
+        position
+      );
+      // `block` may only open in Subject, Object or MetaObject (block-as-field);
+      // `this` names the current document, so it belongs in a Subject.
+      // `off`/`on` are pre-parse commands and rank last inside any slot.
+      const preferred: string[] =
+        role === 'subject' ? ['this', 'block']
+        : role === 'object' || role === 'meta-object' ? ['block']
+        : [];
+      const builtins = ['on', 'off', 'block', 'this'];
+      const rest = [
+        ...builtins.filter((c) => !preferred.includes(c) && c !== 'off' && c !== 'on'),
+        ...[...this.corpusCommands].filter((c) => !builtins.includes(c)).sort(),
+        // pre-parse commands last in a slot, first outside one
+        ...(role === null ? [] : ['off', 'on']),
+      ];
+      const ordered = role === null
+        ? ['off', 'on', 'block', 'this', ...[...this.corpusCommands].filter((c) => !builtins.includes(c)).sort()]
+        : [...preferred, ...rest];
+
+      const typedLower = typed.toLowerCase();
+      let cmdRank = 0;
+      for (const name of ordered) {
+        if (typedLower && !name.toLowerCase().startsWith(typedLower)) continue;
+        const item = new vscode.CompletionItem(name, vscode.CompletionItemKind.Keyword);
+        item.detail = builtins.includes(name) ? 'built-in command' : 'command (from corpus)';
+        item.range = cmdRange;
+        item.filterText = name;
+        item.insertText = name;
+        item.sortText = String(cmdRank++).padStart(4, '0');
+        // `block` takes the only defined parameter; offer it straight after.
+        if (name === 'block') {
+          item.command = { title: 'Trigger Suggest', command: 'editor.action.triggerSuggest' };
+        }
+        items.push(item);
+      }
+      // Right after `block`, offer its `?end=` parameter. The marker VALUE is
+      // not completed — it is an arbitrary string with nothing to draw on.
+      if (/(?:(?:https?:\/\/)?ddot\.it\/|!!)block$/.test(beforeCursor)) {
+        const item = new vscode.CompletionItem('?end=', vscode.CompletionItemKind.Property);
+        item.detail = 'custom block terminator (blank lines then stay inside the block)';
+        item.insertText = '?end=';
+        items.push(item);
+      }
+      return items;
+    }
+
+    // Separator snippets — gated by what is syntactically valid at this slot.
+    //   subject       → `..` (open relation), `....` (skip it, untyped link)
+    //   predicate     → `..` (close relation)
+    //   object        → `,,` (start meta)
+    //   meta-relation → `..` (close meta relation)
+    //   meta-object   → `;;` (next pair), `,,` (close a meta block)
     const allSnippets: Record<string, string> = {
       '..': 'Typed link separator',
       '....': 'Simple link separator',
       ',,': 'Metadata separator',
+      ';;': 'Next metadata pair',
     };
     const validSnippets: Record<Role | 'meta', string[]> = {
       subject: ['..', '....'],
       predicate: ['..'],
       object: [',,'],
+       'meta-relation': ['..'],
+      'meta-object': [';;', ',,'],
       meta: ['..', ',,'],
     };
     // Only emit separator snippets when the user is mid-typing a separator
@@ -343,7 +685,7 @@ class DdotCompletionProvider implements vscode.CompletionItemProvider {
     // `,,` are absorbed by the slot walker, so they don't appear at the
     // tail of `prefix`). The snippet then *replaces* that trailing run
     // rather than inserting after it.
-    const trailingSepMatch = prefix.match(/[.,]+$/);
+    const trailingSepMatch = prefix.match(/[.,;]+$/);
     const trailingSep = trailingSepMatch ? trailingSepMatch[0] : '';
     const wantsSnippets = trailingSep.length > 0;
 
@@ -392,7 +734,8 @@ class DdotCompletionProvider implements vscode.CompletionItemProvider {
     // they're replaced with `..rel..`-form items.
     if (role && !afterDotDot) {
       const prefixLower = prefix.toLowerCase();
-      for (const entity of this.entitiesByRole[role]) {
+      let rank = 0;
+      for (const { value: entity, here, from, pool } of this.candidates(role)) {
         if (entity === prefix) continue;
         if (
           prefixLower !== '' &&
@@ -404,7 +747,9 @@ class DdotCompletionProvider implements vscode.CompletionItemProvider {
           entity,
           vscode.CompletionItemKind.Variable
         );
-        item.detail = `${role[0].toUpperCase() + role.slice(1)} from this document`;
+        item.detail = here ? `${from} — this file` : `${from} — other file`;
+        // Query slot first, then same-file before other-file (autocomplete spec).
+        item.sortText = `${pool}${here ? '0' : '1'}${String(rank++).padStart(4, '0')}`;
         item.range = entityRange;
         item.filterText = entity;
         // subject   → append ` ..` so the next slot (predicate) is opened
@@ -439,7 +784,7 @@ class DdotCompletionProvider implements vscode.CompletionItemProvider {
         new vscode.Position(position.line, afterDotDot),
         position
       );
-      for (const pred of this.entitiesByRole.predicate) {
+      for (const { value: pred } of this.candidates('predicate')) {
         const label = `..${pred}..`;
         const item = new vscode.CompletionItem(
           label,
@@ -466,7 +811,7 @@ class DdotCompletionProvider implements vscode.CompletionItemProvider {
       /^\s*$/.test(beforeCursor) &&
       isContinuationContext(document, position.line)
     ) {
-      for (const pred of this.entitiesByRole.predicate) {
+      for (const { value: pred } of this.candidates('predicate')) {
         const label = `..${pred}..`;
         const item = new vscode.CompletionItem(
           label,
@@ -574,9 +919,27 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.languages.registerCompletionItemProvider(
       selector,
       completionProvider,
+      // Separators, plus the characters that begin a command in each of its
+      // four spellings: `!!…` and `…ddot.it/…`.
       '.',
-      ','
+      ',',
+      ';',
+      '!',
+      '/'
     )
+  );
+
+  // The cross-file candidate index is cached; drop it when the set of .ddot
+  // files or their contents could have changed.
+  const ddotWatcher = vscode.workspace.createFileSystemWatcher('**/*.ddot');
+  ddotWatcher.onDidCreate(() => completionProvider.invalidateOtherFiles());
+  ddotWatcher.onDidChange(() => completionProvider.invalidateOtherFiles());
+  ddotWatcher.onDidDelete(() => completionProvider.invalidateOtherFiles());
+  context.subscriptions.push(ddotWatcher);
+  context.subscriptions.push(
+    vscode.workspace.onDidSaveTextDocument((doc) => {
+      if (doc.languageId === DDOT_LANGUAGE) completionProvider.invalidateOtherFiles();
+    })
   );
 
   // Register Hover
@@ -663,19 +1026,7 @@ export function activate(context: vscode.ExtensionContext) {
       // Emit one event per line (JSONL), matching
       // https://ddot.it/developer-guide.html#events
       // Spec field order: from, type, to, meta, kind, source, location.
-      const events = parseDocument(editor.document);
-      const jsonl = events
-        .map((e) => {
-          const ordered: Record<string, unknown> = { from: e.from };
-          if (e.type !== undefined) ordered.type = e.type;
-          ordered.to = e.to;
-          if (e.meta !== undefined) ordered.meta = e.meta;
-          ordered.kind = e.kind;
-          ordered.source = e.source;
-          ordered.location = e.location;
-          return JSON.stringify(ordered);
-        })
-        .join('\n');
+      const jsonl = toJsonl(parseDocument(editor.document));
 
       vscode.workspace
         .openTextDocument({ language: 'jsonl', content: jsonl })
@@ -709,149 +1060,17 @@ function validateDocument(document: vscode.TextDocument): any[] {
   return issues;
 }
 
-// Triple Event — matches the schema documented at
-// https://ddot.it/developer-guide.html#events
-type DdotMeta = { type: string; to: string };
-type DdotEvent = {
-  from: string;
-  type?: string;
-  to: string;
-  meta?: DdotMeta[];
-  kind: string;
-  source: string;
-  location: number;
-};
-
-// Split a line body into segments between `..`/`....` separators, plus any
-// trailing metadata text after `,,`.
-function splitLine(text: string): {
-  segments: string[];
-  seps: string[];
-  meta: string;
-} {
-  const idx = text.indexOf(',,');
-  const body = idx >= 0 ? text.substring(0, idx) : text;
-  const meta = idx >= 0 ? text.substring(idx + 2).trim() : '';
-
-  const segments: string[] = [];
-  const seps: string[] = [];
-  let lastIdx = 0;
-  const sepRegex = /\.{4}|\.{2}/g;
-  let m: RegExpExecArray | null;
-  while ((m = sepRegex.exec(body)) !== null) {
-    segments.push(body.substring(lastIdx, m.index).trim());
-    seps.push(m[0]);
-    lastIdx = m.index + m[0].length;
-  }
-  segments.push(body.substring(lastIdx).trim());
-  return { segments, seps, meta };
-}
-
-// Extract a {from, type?, to} triple from parsed segments. An empty leading
-// segment is a continuation — the inherited subject is used as `from`.
-function extractTriple(
-  segments: string[],
-  seps: string[],
-  inheritedSubject: string | null
-): { from: string; type?: string; to: string } | null {
-  // Typed link: `from ..type.. to`  (continuation: `..type.. to`).
-  // Empty type ⇒ `.. ..` form, a typographic variant of `....` (untyped).
-  if (
-    segments.length === 3 &&
-    seps.length === 2 &&
-    seps[0] === '..' &&
-    seps[1] === '..'
-  ) {
-    const [s, p, o] = segments;
-    if (!o) return null;
-    const from = s !== '' ? s : inheritedSubject;
-    if (!from) return null;
-    if (!p) return { from, to: o };
-    return { from, type: p, to: o };
-  }
-  // Simple link: `from .... to`  (continuation: `.... to`)
-  if (segments.length === 2 && seps.length === 1 && seps[0] === '....') {
-    const [s, o] = segments;
-    if (!o) return null;
-    const from = s !== '' ? s : inheritedSubject;
-    if (!from) return null;
-    return { from, to: o };
-  }
-  return null;
-}
-
+// Events come from the shared fold over the tokenizer (src/events.ts), which is
+// byte-identical to the Java DdotEventExporter and verified against the
+// cross-implementation corpus by `npm run check-corpus`. The line splitter that
+// used to live here silently dropped `!!block` bodies, free meta text,
+// `;;`-separated meta pairs and the untyped `,, .... value` shortcut.
 function parseDocument(document: vscode.TextDocument): DdotEvent[] {
-  const events: DdotEvent[] = [];
-  const lines = document.getText().split('\n');
-  const source = vscode.workspace.asRelativePath(document.uri, false);
-  const kind = document.languageId;
-
-  let currentSubject: string | null = null;
-  let openMetaEvent: DdotEvent | null = null;
-  let off = false;
-
-  for (let i = 0; i < lines.length; i++) {
-    const trimmed = lines[i].trim();
-    if (trimmed === '') continue;
-
-    // Both forms are equivalent: `!!` is shorthand for `ddot.it/`.
-    if (trimmed === 'ddot.it/off' || trimmed === '!!off') {
-      off = true;
-      // An open multi-line meta block can't survive an off span; close it.
-      openMetaEvent = null;
-      continue;
-    }
-    if (trimmed === 'ddot.it/on' || trimmed === '!!on') {
-      off = false;
-      continue;
-    }
-    if (off) continue;
-
-    // Inside an open multi-line metadata block: each non-`,,` line is a
-    // ..key.. value pair appended to the previous event's meta array.
-    if (openMetaEvent) {
-      if (trimmed === ',,') {
-        openMetaEvent = null;
-        continue;
-      }
-      const { segments, seps } = splitLine(trimmed);
-      const t = extractTriple(segments, seps, currentSubject);
-      if (t && t.type) {
-        (openMetaEvent.meta ??= []).push({ type: t.type, to: t.to });
-      }
-      continue;
-    }
-
-    const { segments, seps, meta } = splitLine(trimmed);
-    const t = extractTriple(segments, seps, currentSubject);
-    if (!t) continue;
-
-    const event: DdotEvent = {
-      from: t.from,
-      to: t.to,
-      kind,
-      source,
-      location: i + 1,
-    };
-    if (t.type) event.type = t.type;
-    currentSubject = t.from;
-
-    // Inline metadata: `,, ..key.. value`
-    if (meta) {
-      const mp = splitLine(meta);
-      const mt = extractTriple(mp.segments, mp.seps, currentSubject);
-      if (mt && mt.type) {
-        event.meta = [{ type: mt.type, to: mt.to }];
-      }
-    } else if (trimmed.endsWith(',,')) {
-      // Bare `,,` at line end opens a multi-line metadata block.
-      openMetaEvent = event;
-    }
-
-    events.push(event);
-  }
-
-  return events;
+  return parseEvents(
+    document.getText(),
+    document.languageId,
+    vscode.workspace.asRelativePath(document.uri, false)
+  );
 }
 
 export function deactivate() {}

@@ -17,7 +17,8 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "install-grammar": "node scripts/install-grammar.mjs",
-    "postinstall": "npm run install-grammar"
+    "postinstall": "npm run install-grammar",
+    "check-corpus": "node scripts/check-corpus.mjs"
   },
   "devDependencies": {
     "typescript": "^5.7.0",
