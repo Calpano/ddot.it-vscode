@@ -24,7 +24,7 @@
     "typescript": "^5.7.0",
     "@types/node": "^24.0.0",
     "@types/vscode": "^1.76.0",
-    "@calpano/ddot-textmate-grammar": "^0.1.0"
+    "@calpano/ddot-textmate-grammar": "^0.1.2"
   },
   "activationEvents": ["onLanguage:ddot.it", "workspaceContains:**/*.ddot"],
   "main": "./out/extension.js",
