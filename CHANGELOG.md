@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.0.8
+
+### Autocompletion
+
+- **Completion knows where the cursor actually is.** It used to decide what
+  to offer by re-splitting the current line with its own regex, which could
+  not see structure spanning lines. So it offered subjects inside `!!block`
+  bodies, ignored metadata context, and completed inside regions turned off
+  with `!!off`. The cursor slot is now derived from the same tokenizer the
+  highlighter and `Export as JSON` use, so all three agree on what a
+  position means.
+- **Metadata gets its own vocabulary.** Meta relations and meta objects are
+  now indexed as separate pools rather than being lumped in with predicates
+  and objects, so `,, ` completions no longer suggest terms that only ever
+  appear in triples.
+- **Ranking follows the Autocomplete Specification's query catalog.**
+  Each slot draws on its own pool first, then the rest of its family —
+  value-like (subject / object / meta-object) or relation-like (predicate /
+  meta-relation). A relation-like slot never offers values. Inference ranks
+  candidates rather than filtering them, so a term you have used before
+  stays reachable even in an unusual position.
+- **Frequency-ranked.** Within a pool, candidates are ordered by how often
+  they occur, and terms from the current file outrank terms from elsewhere
+  in the workspace.
+
+### Tooling
+
+- `npm run check-corpus` asserts both the token stream and the event stream
+  against the shared `test-data/cases/` corpus in the sibling `ddot.it`
+  repository — 33 cases, byte-identical. The tokenizer is shared across
+  implementations, and this is what keeps it that way.
+- `install-grammar` now prefers a sibling `ddot.it-syntax-tools` checkout
+  over the published npm package. Editing the grammar next door and running
+  `npm install` here used to replace it silently with the last *released*
+  grammar, so the extension highlighted with something other than what the
+  conformance suite tests. Packaging is unaffected: with no sibling present
+  it falls through to the npm package.
+
 ## 0.0.7
 
 ### Grammar
